@@ -1,102 +1,126 @@
 import os
+import openai
 import subprocess
 import re
 from textwrap import dedent
 
-# Paths to log files (created by the GitHub Action steps)
+# Load OpenAI API key
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+USE_OPENAI = bool(OPENAI_API_KEY)  # Only use AI if API key is available
+
+# Define log file paths
 LOG_FILES = {
     "pytest": "pytest.log",
     "flake8": "flake8.log",
     "pylint": "pylint.log"
 }
 
-# Collect errors and warnings from logs
-error_summary = {}
-for tool, log_path in LOG_FILES.items():
-    if os.path.exists(log_path):
-        with open(log_path, 'r') as f:
-            log_content = f.read()
-        # Filter relevant lines
-        if tool == "pytest":
-            # Capture summary of failures and first lines of error messages
-            failed_tests = re.findall(r"=+ FAILURES =+\\n(.*?)(?==+)", log_content, re.S)
-            # If any failures, take a snippet of each
-            if failed_tests:
-                error_summary['pytest'] = "Failures:\n" + "\n\n".join(
-                    [failed_tests[0][:500]]  # include first 500 chars of first failure (truncate if long)
-                )
-                # Note: Could capture multiple failures if needed
-        elif tool == "flake8":
-            # Collect flake8 error lines
-            issues = [line for line in log_content.splitlines() if line.strip() and not line.startswith("==")]
-            if issues:
-                error_summary['flake8'] = "\n".join(issues[:20])  # include at most 20 issues to avoid huge output
-        elif tool == "pylint":
-            # Collect Pylint warnings/errors (skip summary footer)
-            lines = [l for l in log_content.splitlines() if l.strip() and not l.startswith(("********", "Your code", "pylint"))]
-            if lines:
-                error_summary['pylint'] = "\n".join(lines[:20])  # include first 20 lines of pylint output
+# Parse logs to extract error summaries
+def extract_errors():
+    error_summary = {}
 
-# If nothing to fix (no errors collected), exit
-if not error_summary:
-    print("No errors to fix detected. Exiting.")
-    exit(0)
+    for tool, log_path in LOG_FILES.items():
+        if os.path.exists(log_path):
+            with open(log_path, 'r') as f:
+                log_content = f.read()
 
-# 1. Apply automatic fixes to the codebase
-# a) Use autopep8 to fix formatting issues (PEP8 style errors) across the repository
-subprocess.run(["autopep8", "--in-place", "--aggressive", "--aggressive", "--recursive", "."], check=False)
-# b) Use autoflake to remove unused imports and variables (safe removal)
-subprocess.run(["autoflake", "--in-place", "--remove-all-unused-imports", "--remove-unused-variables", "--recursive", "."], check=False)
+            if tool == "pytest":
+                failed_tests = re.findall(r"=+ FAILURES =+\\n(.*?)(?==+)", log_content, re.S)
+                if failed_tests:
+                    error_summary['pytest'] = "Failures:\n" + failed_tests[0][:500]
 
-# (Optional) You could run isort or black as additional formatters if desired:
-# subprocess.run(["isort", "."], check=False)
-# subprocess.run(["black", "."], check=False)
+            elif tool in ["flake8", "pylint"]:
+                issues = [line for line in log_content.splitlines() if line.strip()]
+                if issues:
+                    error_summary[tool] = "\n".join(issues[:20])  # Limit to 20 errors
 
-# 2. Configure git identity for the bot commit
-bot_name = os.getenv("GITHUB_ACTOR", "ci-bot")
-subprocess.run(["git", "config", "--local", "user.name", bot_name], check=True)
-subprocess.run(["git", "config", "--local", "user.email", f"{bot_name}@users.noreply.github.com"], check=True)
+    return error_summary
 
-# 3. Create a new branch for the fixes
-branch_name = "ci-fix-auto-{0}".format(os.getenv("GITHUB_RUN_ID", "1"))
-subprocess.run(["git", "checkout", "-b", branch_name], check=True)
+# Submit logs + code to OpenAI for fixes
+def get_openai_fix(error_summary):
+    if not USE_OPENAI:
+        return None
 
-# 4. Commit the changes (if any)
-subprocess.run(["git", "add", "-A"], check=True)
-# Use a generic commit message, include [skip ci] to avoid re-running CI on the fix branch
-commit_msg = "Auto-fix CI issues [skip ci]"
-result = subprocess.run(["git", "diff", "--cached", "--quiet"])
-if result.returncode != 0:  # there are changes staged
-    subprocess.run(["git", "commit", "-m", commit_msg], check=True)
-else:
-    print("No changes to commit after auto-fix. Exiting.")
-    # Nothing changed by autopep8/autoflake, so exit to avoid creating an empty PR
-    exit(0)
+    # Prepare request payload
+    logs = "\n\n".join([f"{tool}:\n{summary}" for tool, summary in error_summary.items()])
+    prompt = dedent(f"""
+    You are an AI that reviews Python CI/CD failures and suggests code fixes.
+    Here are logs from pytest, flake8, and pylint:
+    
+    {logs}
 
-# 5. Push the new branch to origin
-repo = os.getenv("GITHUB_REPOSITORY")  # e.g. user/repo
-if repo:
-    remote_branch = f"origin {branch_name}"
-else:
-    remote_branch = branch_name
-subprocess.run(["git", "push", "origin", branch_name], check=True)
+    Provide fixes for the detected issues. Return only modified code snippets.
+    """)
 
-# 6. Assemble the PR title and body
-pr_title = "🤖 Auto-fix for failing CI on main"
-pr_body = "# Automated fixes for CI failures\n"
-pr_body += "This PR was created automatically because CI on `main` failed. The following issues were identified and fixed:\n\n"
-for tool, summary in error_summary.items():
-    pr_body += f"## {tool.capitalize()} Output:\n```\n{summary}\n```\n\n"
-pr_body += "_*Logs have been truncated for brevity. Please review the changes and merge if they look correct.*_"
+    # OpenAI API call
+    response = openai.ChatCompletion.create(
+        model="gpt-4-turbo",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=1000
+    )
 
-# 7. Create a Pull Request using GitHub CLI
-subprocess.run([
-    "gh", "pr", "create",
-    "--title", pr_title,
-    "--body", pr_body,
-    "--head", branch_name,
-    "--base", "main",
-    "--label", "ci-fix",
-    "--assignee", "@me",   # assign to the person who triggered or maintainers can adjust
-    "--draft"             # create as a draft PR to avoid auto-merging
-], check=True)
+    return response["choices"][0]["message"]["content"]
+
+# Apply AI fixes
+def apply_fixes(ai_fixes):
+    if not ai_fixes:
+        return
+
+    # Apply fixes (write directly to affected files)
+    for fix in ai_fixes.split("\n\n"):
+        if "```python" in fix:
+            fix = fix.split("```python")[1].split("```")[0].strip()
+
+        file_path = fix.split("\n")[0].strip()  # Extract filename from first line
+        modified_code = "\n".join(fix.split("\n")[1:])  # Remove filename
+
+        # Write fixes to file
+        with open(file_path, "w") as f:
+            f.write(modified_code)
+
+# Commit & create PR
+def create_pr(error_summary):
+    bot_name = os.getenv("GITHUB_ACTOR", "ci-bot")
+    branch_name = f"ci-fix-auto-{os.getenv('GITHUB_RUN_ID', '1')}"
+
+    # Configure git identity
+    subprocess.run(["git", "config", "--local", "user.name", bot_name], check=True)
+    subprocess.run(["git", "config", "--local", "user.email", f"{bot_name}@users.noreply.github.com"], check=True)
+
+    # Create new branch
+    subprocess.run(["git", "checkout", "-b", branch_name], check=True)
+    subprocess.run(["git", "add", "-A"], check=True)
+    subprocess.run(["git", "commit", "-m", "Auto-fix CI issues [skip ci]"], check=True)
+    subprocess.run(["git", "push", "origin", branch_name], check=True)
+
+    # Assemble PR content
+    pr_title = "🤖 Auto-fix for failing CI on main"
+    pr_body = "## Automated Fixes for CI Failures\n"
+    for tool, summary in error_summary.items():
+        pr_body += f"### {tool.capitalize()} Output:\n```\n{summary}\n```\n\n"
+
+    pr_body += "**Fixes generated automatically based on CI/CD logs. Please review before merging.**"
+
+    # Create PR
+    subprocess.run([
+        "gh", "pr", "create",
+        "--title", pr_title,
+        "--body", pr_body,
+        "--head", branch_name,
+        "--base", "main",
+        "--label", "ci-fix",
+        "--assignee", "@me",
+        "--draft"
+    ], check=True)
+
+# Main Execution
+if __name__ == "__main__":
+    errors = extract_errors()
+
+    if not errors:
+        print("No errors found. Exiting.")
+        exit(0)
+
+    ai_fixes = get_openai_fix(errors)
+    apply_fixes(ai_fixes)
+    create_pr(errors)
