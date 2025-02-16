@@ -1,0 +1,62 @@
+name: Auto Fix CI Failures
+
+on:
+  push:
+    branches:
+      - main  # Run only on main branch pushes
+  # Optionally, you could use workflow_dispatch for manual trigger:
+  # workflow_dispatch:
+
+permissions:
+  contents: write   # allow pushing branches and creating PRs
+  pull-requests: write
+
+jobs:
+  ci-auto-fix:
+    name: CI Auto Fixer
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'  # specify your Python version
+
+      - name: Install dependencies
+        run: |
+          pip install -U pip
+          # Install test runner and linters
+          pip install pytest flake8 pylint autopep8 autoflake
+      - name: Run Tests
+        id: tests
+        run: |
+          pytest -q 2>&1 | tee pytest.log
+          echo "::set-output name=exitcode::${PIPESTATUS[0]}"
+        continue-on-error: true
+
+      - name: Run Flake8
+        id: flake8
+        run: |
+          flake8 . 2>&1 | tee flake8.log
+          # flake8 exits with nonzero if issues found
+          echo "::set-output name=exitcode::${PIPESTATUS[0]}"
+        continue-on-error: true
+
+      - name: Run Pylint
+        id: pylint
+        run: |
+          pylint **/*.py -r n 2>&1 | tee pylint.log
+          echo "::set-output name=exitcode::${PIPESTATUS[0]}"
+        continue-on-error: true
+
+      - name: Auto-Fix and Create PR
+        if: ${{ steps.tests.outputs.exitcode != '0' || steps.flake8.outputs.exitcode != '0' || steps.pylint.outputs.exitcode != '0' }}
+        run: python .github/scripts/auto_fix_ci_errors.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          # Pass workflow run URL or ID for reference (optional)
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
