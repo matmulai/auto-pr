@@ -49,7 +49,7 @@ jobs:
 
       - name: Auto-Fix and Submit PR
         if: ${{ steps.tests.outputs.exitcode != '0' || steps.flake8.outputs.exitcode != '0' || steps.pylint.outputs.exitcode != '0' }}
-        run: python .github/scripts/auto_fix_ci_errors.py
+        run: python .github/scripts/auto-pr.py
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
