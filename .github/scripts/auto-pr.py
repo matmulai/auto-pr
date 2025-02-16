@@ -90,6 +90,14 @@ def create_pr(error_summary):
     # Create new branch
     subprocess.run(["git", "checkout", "-b", branch_name], check=True)
     subprocess.run(["git", "add", "-A"], check=True)
+
+    # **Check if there are any changes to commit**
+    status = subprocess.run(["git", "diff", "--cached", "--quiet"])
+    if status.returncode == 0:
+        print("No changes detected. Exiting without creating a PR.")
+        exit(0)  # Exit script without error if no changes
+
+    # Commit changes if they exist
     subprocess.run(["git", "commit", "-m", "Auto-fix CI issues [skip ci]"], check=True)
     subprocess.run(["git", "push", "origin", branch_name], check=True)
 
@@ -98,7 +106,6 @@ def create_pr(error_summary):
     pr_body = "## Automated Fixes for CI Failures\n"
     for tool, summary in error_summary.items():
         pr_body += f"### {tool.capitalize()} Output:\n```\n{summary}\n```\n\n"
-
     pr_body += "**Fixes generated automatically based on CI/CD logs. Please review before merging.**"
 
     # Create PR
@@ -112,15 +119,3 @@ def create_pr(error_summary):
         "--assignee", "@me",
         "--draft"
     ], check=True)
-
-# Main Execution
-if __name__ == "__main__":
-    errors = extract_errors()
-
-    if not errors:
-        print("No errors found. Exiting.")
-        exit(0)
-
-    ai_fixes = get_openai_fix(errors)
-    apply_fixes(ai_fixes)
-    create_pr(errors)
