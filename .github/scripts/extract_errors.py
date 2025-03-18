@@ -98,7 +98,7 @@ def main():
     # Combine test and lint errors
     all_errors = {}
     all_errors.update(extract_lint_errors())
-    all_errors.update(extract_test_errors())
+    all_errors.update(extract_pytest_errors())  # Fixed: changed from extract_test_errors to extract_pytest_errors
     
     # Output errors for use in GitHub Actions
     error_details = []
