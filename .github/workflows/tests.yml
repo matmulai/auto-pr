@@ -1,11 +1,9 @@
 name: Test
-
 on:
   push:
     branches: ["**"]
   pull_request:
     branches: ["**"]
-
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -22,7 +20,6 @@ jobs:
       - name: Lint with pylint
         run: |
           pylint calculator/ tests/ --exit-zero --output-format=parseable
-
   test:
     runs-on: ubuntu-latest
     steps:
@@ -41,7 +38,7 @@ jobs:
           pytest --junitxml=report.xml
       - name: Upload test report
         if: failure()  # Upload artifact only if tests fail
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4  # Updated to v4
         with:
           name: test-report
           path: report.xml
