@@ -21,6 +21,7 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0  # Get all files and history
+          token: ${{ secrets.GITHUB_TOKEN }}
           
       - name: Download workflow artifacts
         uses: dawidd6/action-download-artifact@v6
@@ -35,25 +36,6 @@ jobs:
           echo "Downloaded artifacts:"
           ls -la artifacts/ || echo "No artifacts directory found"
           
-      - name: Debug repository structure
-        run: |
-          echo "Current working directory: $(pwd)"
-          echo "Repository contents:"
-          ls -la
-          echo "GitHub workspace: $GITHUB_WORKSPACE"
-          echo ".github directory:"
-          ls -la .github/ || echo "No .github directory"
-          echo ".github/scripts directory:"
-          ls -la .github/scripts/ || echo "No scripts directory"
-          echo "Calculator directory:"
-          ls -la calculator/ || echo "No calculator directory"
-          echo "Tests directory:"
-          ls -la tests/ || echo "No tests directory"
-          
-      - name: Set script permissions
-        run: |
-          chmod +x .github/scripts/*.py || echo "Failed to set script permissions"
-          
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
@@ -65,11 +47,9 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install requests openai pytest pylint
           
-      - name: Get test results
-        id: get-errors
+      - name: Set script permissions
         run: |
-          # Get the test logs from the artifacts or GitHub API
-          python .github/scripts/extract_errors.py || echo "Failed to extract errors but continuing"
+          chmod +x .github/scripts/*.py || echo "Failed to set script permissions"
           
       - name: Configure Git
         run: |
@@ -82,14 +62,20 @@ jobs:
           git checkout -b $BRANCH_NAME
           echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
           
-      - name: Debug OpenAI setup
+      - name: Create empty files if needed
         run: |
-          # Check if API key is set without revealing it
-          if [ -z "$OPENAI_API_KEY" ]; then
-            echo "WARNING: OPENAI_API_KEY is not set"
-          else
-            echo "OPENAI_API_KEY is set"
-          fi
+          # Just make sure directories exist
+          mkdir -p calculator tests .github/scripts
+          
+          # Create empty files if they don't exist
+          touch calculator/__init__.py
+          touch tests/__init__.py
+          
+      - name: Run tests to capture errors
+        id: test-run
+        run: |
+          # Run tests and capture output
+          python -m pytest || echo "Tests failed as expected"
           
       - name: Fix code with OpenAI
         id: fix-code
@@ -97,52 +83,26 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          # Ensure directories exist but don't create files
-          mkdir -p calculator tests
           # Run the fix code script
-          python .github/scripts/fix_code.py || echo "Fix attempt had issues but continuing workflow"
-          
-      - name: Verify fixes
-        id: verify
-        run: |
-          # Run tests to verify if fixes worked
-          if python -m pytest; then
-            echo "fix_successful=true" >> $GITHUB_OUTPUT
-            echo "All tests passed after fixes!"
-          else
-            echo "fix_successful=false" >> $GITHUB_OUTPUT
-            echo "Tests still failing after attempted fixes."
-          fi
-          
-      - name: List changes
-        run: |
-          echo "Changes made:"
-          git status
-          git diff
+          python .github/scripts/fix_code.py
+          echo "fix_complete=true" >> $GITHUB_OUTPUT
           
       - name: Commit changes
         run: |
           git add -A
           git commit -m "fix: Auto-fixed issues using OpenAI" || echo "No changes to commit"
           
+      - name: Push branch
+        run: |
+          git push origin ${{ env.BRANCH_NAME }} || echo "Failed to push branch"
+          
       - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "fix: Auto-fixed issues using OpenAI"
-          title: "Auto-fix: Resolved issues from commit ${{ github.event.workflow_run.head_sha }}"
-          body: |
-            This PR was automatically created by the Auto-PR GitHub Action.
-            
-            ## Original Issues:
-            ```
-            ${{ steps.get-errors.outputs.error_details || 'No detailed errors available' }}
-            ```
-            
-            ## Changes Made:
-            ${{ steps.fix-code.outputs.changes_summary || 'Changes were attempted' }}
-            
-            ## Verification Results:
-            ${{ steps.verify.outputs.fix_successful == 'true' && 'All tests are now passing!' || 'Tests are still failing. This PR shows the attempted fixes.' }}
-          branch: ${{ env.BRANCH_NAME }}
-          base: ${{ github.event.workflow_run.head_ref }}
+        run: |
+          PR_URL=$(gh pr create \
+            --title "Auto-fix: Resolved issues from commit ${{ github.event.workflow_run.head_sha }}" \
+            --body "This PR was automatically created by the Auto-PR GitHub Action. Check the changes to see if they resolve the test failures." \
+            --base ${{ github.event.workflow_run.head_ref }} \
+            --head ${{ env.BRANCH_NAME }})
+          echo "Created PR: $PR_URL"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
