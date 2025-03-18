@@ -1,69 +1,47 @@
 name: Auto PR
 
 on:
-  push:
-    branches: ['**']
+  workflow_run:
+    workflows: ["Test"]  # This refers to the name of your test workflow
+    types:
+      - completed
+    branches: ["**"]
 
 jobs:
-  check-for-auto-pr:
+  auto-pr:
     runs-on: ubuntu-latest
-    if: contains(github.event.head_commit.message, 'auto-pr')
-    outputs:
-      should-run: ${{ steps.check.outputs.should-run }}
-    steps:
-      - name: Check commit message
-        id: check
-        run: echo "should-run=true" >> $GITHUB_OUTPUT
-
-  wait-for-actions:
-    needs: check-for-auto-pr
-    if: needs.check-for-auto-pr.outputs.should-run == 'true'
-    runs-on: ubuntu-latest
-    outputs:
-      lint-errors: ${{ steps.get-actions-status.outputs.lint-errors }}
-      test-errors: ${{ steps.get-actions-status.outputs.test-errors }}
-      affected-files: ${{ steps.get-actions-status.outputs.affected-files }}
+    # Only run if the triggering commit contained "auto-pr" in the message
+    if: ${{ github.event.workflow_run.conclusion == 'failure' && contains(github.event.workflow_run.head_commit.message, 'auto-pr') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_branch }}
           
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
+      - name: Download workflow artifacts
+        uses: dawidd6/action-download-artifact@v2
         with:
-          node-version: '16'
+          workflow: ${{ github.event.workflow_run.workflow_id }}
+          run_id: ${{ github.event.workflow_run.id }}
+          path: artifacts
+          
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
           
       - name: Install dependencies
-        run: npm install @octokit/rest
-          
-      - name: Wait for and get statuses of other actions
-        id: get-actions-status
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          COMMIT_SHA: ${{ github.sha }}
         run: |
-          node .github/scripts/wait-for-actions.js
-
-  fix-code:
-    needs: [check-for-auto-pr, wait-for-actions]
-    if: |
-      needs.check-for-auto-pr.outputs.should-run == 'true' && 
-      (needs.wait-for-actions.outputs.lint-errors != '{}' || needs.wait-for-actions.outputs.test-errors != '{}')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install requests
           
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '16'
+      - name: Get test results
+        id: get-errors
+        run: |
+          # Get the test logs from the artifacts or GitHub API
+          python .github/scripts/extract_errors.py
           
-      - name: Install dependencies
-        run: npm install @octokit/rest axios
-
       - name: Configure Git
         run: |
           git config --global user.name "GitHub Actions Bot"
@@ -80,39 +58,44 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          REPO: ${{ github.repository }}
-          COMMIT_SHA: ${{ github.sha }}
-          LINT_ERRORS: ${{ needs.wait-for-actions.outputs.lint-errors }}
-          TEST_ERRORS: ${{ needs.wait-for-actions.outputs.test-errors }}
-          AFFECTED_FILES: ${{ needs.wait-for-actions.outputs.affected-files }}
           MAX_ATTEMPTS: ${{ inputs.max-attempts || 3 }}
         run: |
-          node .github/scripts/fix-code.js
+          python .github/scripts/fix_code.py
+          
+      - name: Verify fixes
+        id: verify
+        run: |
+          # Run tests to verify if fixes worked
+          if python -m pytest; then
+            echo "fix_successful=true" >> $GITHUB_OUTPUT
+            echo "All tests passed after fixes!"
+          else
+            echo "fix_successful=false" >> $GITHUB_OUTPUT
+            echo "Tests still failing after attempted fixes."
+          fi
           
       - name: Create Pull Request
-        if: steps.fix-code.outputs.success == 'true'
+        if: steps.verify.outputs.fix_successful == 'true'
         uses: peter-evans/create-pull-request@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "fix: Auto-fixed issues using OpenAI"
-          title: "Auto-fix: Resolved issues from commit ${{ github.sha }}"
+          title: "Auto-fix: Resolved issues from commit ${{ github.event.workflow_run.head_commit.id }}"
           body: |
             This PR was automatically created by the Auto-PR GitHub Action.
             
             ## Original Issues:
             ```
-            ${{ steps.fix-code.outputs.original-errors }}
+            ${{ steps.get-errors.outputs.error_details }}
             ```
             
             ## Changes Made:
-            ${{ steps.fix-code.outputs.changes-made }}
+            ${{ steps.fix-code.outputs.changes_summary }}
             
             ## Verification Results:
-            ```
-            ${{ steps.fix-code.outputs.verification-results }}
-            ```
+            All tests are now passing!
           branch: ${{ env.BRANCH_NAME }}
-          base: ${{ github.ref_name }}
+          base: ${{ github.event.workflow_run.head_branch }}
 
 inputs:
   max-attempts:
