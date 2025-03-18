@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     # Only run if the triggering commit contained "auto-pr" in the message
     if: ${{ github.event.workflow_run.conclusion == 'failure' && contains(github.event.workflow_run.head_commit.message, 'auto-pr') }}
+    env:
+      MAX_ATTEMPTS: 3  # Default value for maximum fix attempts
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -19,7 +21,7 @@ jobs:
           ref: ${{ github.event.workflow_run.head_branch }}
           
       - name: Download workflow artifacts
-        uses: dawidd6/action-download-artifact@v6
+        uses: dawidd6/action-download-artifact@v2
         with:
           workflow: ${{ github.event.workflow_run.workflow_id }}
           run_id: ${{ github.event.workflow_run.id }}
@@ -58,7 +60,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          MAX_ATTEMPTS: ${{ inputs.max-attempts || 3 }}
         run: |
           python .github/scripts/fix_code.py
           
@@ -96,9 +97,3 @@ jobs:
             All tests are now passing!
           branch: ${{ env.BRANCH_NAME }}
           base: ${{ github.event.workflow_run.head_branch }}
-
-inputs:
-  max-attempts:
-    description: 'Maximum number of attempts to fix the code'
-    required: false
-    default: '3'
