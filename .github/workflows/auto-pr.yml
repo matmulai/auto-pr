@@ -1,16 +1,14 @@
 name: Auto PR
-
 on:
   workflow_run:
     workflows: ["Test"]  # This refers to the name of your test workflow
     types:
       - completed
     branches: ["**"]
-
 jobs:
   auto-pr:
     runs-on: ubuntu-latest
-    # Only run if the triggering commit contained "auto-pr" in the message
+    # Only run if the triggering commit contained "auto-pr" in the message and the workflow failed
     if: ${{ github.event.workflow_run.conclusion == 'failure' && contains(github.event.workflow_run.head_commit.message, 'auto-pr') }}
     env:
       MAX_ATTEMPTS: 3  # Default value for maximum fix attempts
@@ -18,14 +16,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
-          ref: ${{ github.event.workflow_run.head_branch }}
+          ref: ${{ github.event.workflow_run.head_sha }}
           
       - name: Download workflow artifacts
         uses: dawidd6/action-download-artifact@v6
         with:
-          workflow: ${{ github.event.workflow_run.workflow_id }}
+          workflow: Test
           run_id: ${{ github.event.workflow_run.id }}
           path: artifacts
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: List artifacts
+        run: |
+          echo "Downloaded artifacts:"
+          ls -la artifacts/ || echo "No artifacts directory found"
           
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -81,7 +85,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "fix: Auto-fixed issues using OpenAI"
-          title: "Auto-fix: Resolved issues from commit ${{ github.event.workflow_run.head_commit.id }}"
+          title: "Auto-fix: Resolved issues from commit ${{ github.event.workflow_run.head_sha }}"
           body: |
             This PR was automatically created by the Auto-PR GitHub Action.
             
@@ -96,4 +100,4 @@ jobs:
             ## Verification Results:
             All tests are now passing!
           branch: ${{ env.BRANCH_NAME }}
-          base: ${{ github.event.workflow_run.head_branch }}
+          base: ${{ github.event.workflow_run.head_ref }}
