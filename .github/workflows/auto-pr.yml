@@ -1,47 +1,108 @@
-name: Test
-
+name: Auto PR
 on:
-  push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
+  workflow_run:
+    workflows: ["Test"]
+    types:
+      - completed
+    branches: ["**"]
+
+permissions:
+  contents: write    
+  pull-requests: write
 
 jobs:
-  lint:
+  auto-pr:
     runs-on: ubuntu-latest
+    # Only run if the triggering commit contained "auto-pr" in the message and the workflow failed
+    if: ${{ github.event.workflow_run.conclusion == 'failure' && contains(github.event.workflow_run.head_commit.message, 'auto-pr') }}
+    env:
+      MAX_ATTEMPTS: 3  # Default value for maximum fix attempts
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          
+      - name: Download workflow artifacts
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: Test
+          run_id: ${{ github.event.workflow_run.id }}
+          path: artifacts
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: List artifacts
+        run: |
+          echo "Downloaded artifacts:"
+          ls -la artifacts/ || echo "No artifacts directory found"
+          
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
+          
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-      - name: Lint with pylint
+          pip install requests
+          
+      - name: Get test results
+        id: get-errors
         run: |
-          pylint calculator/ tests/ --exit-zero --output-format=parseable
-
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Set up Python
-        uses: actions/setup-python@v4
+          # Get the test logs from the artifacts or GitHub API
+          python .github/scripts/extract_errors.py
+          
+      - name: Configure Git
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+          
+      - name: Create fix branch
+        run: |
+          BRANCH_NAME="auto-pr/fix-${GITHUB_SHA::8}"
+          git checkout -b $BRANCH_NAME
+          echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
+          
+      - name: Fix code with OpenAI
+        id: fix-code
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python .github/scripts/fix_code.py
+          
+      - name: Verify fixes
+        id: verify
+        run: |
+          # Run tests to verify if fixes worked
+          if python -m pytest; then
+            echo "fix_successful=true" >> $GITHUB_OUTPUT
+            echo "All tests passed after fixes!"
+          else
+            echo "fix_successful=false" >> $GITHUB_OUTPUT
+            echo "Tests still failing after attempted fixes."
+          fi
+          
+      - name: Create Pull Request
+        if: steps.verify.outputs.fix_successful == 'true'
+        uses: peter-evans/create-pull-request@v5
         with:
-          python-version: '3.10'
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-      - name: Test with pytest
-        run: |
-          # Generate a JUnit XML report for pytest
-          pytest --junitxml=report.xml
-      - name: Upload test report
-        if: failure()  # Upload artifact only if tests fail
-        uses: actions/upload-artifact@v3
-        with:
-          name: test-report
-          path: report.xml
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "fix: Auto-fixed issues using OpenAI"
+          title: "Auto-fix: Resolved issues from commit ${{ github.event.workflow_run.head_sha }}"
+          body: |
+            This PR was automatically created by the Auto-PR GitHub Action.
+            
+            ## Original Issues:
+            ```
+            ${{ steps.get-errors.outputs.error_details }}
+            ```
+            
+            ## Changes Made:
+            ${{ steps.fix-code.outputs.changes_summary }}
+            
+            ## Verification Results:
+            All tests are now passing!
+          branch: ${{ env.BRANCH_NAME }}
+          base: ${{ github.event.workflow_run.head_ref }}
