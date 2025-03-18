@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="5" time="0.054" timestamp="2025-03-18T22:45:58.432706" hostname="fv-az1376-815"><testcase classname="tests.test_calculator" name="test_add" time="0.001" /><testcase classname="tests.test_calculator" name="test_subtract" time="0.000" /><testcase classname="tests.test_calculator" name="test_multiply" time="0.001"><failure message="assert 7 == 6&#10; +  where 7 = multiply(2, 3)">def test_multiply():
+        """Test the multiply function."""
+&gt;       assert multiply(2, 3) == 6  # Will fail: returns 7 instead of 6
+E       assert 7 == 6
+E        +  where 7 = multiply(2, 3)
+
+tests/test_calculator.py:22: AssertionError</failure></testcase><testcase classname="tests.test_calculator" name="test_divide" time="0.000" /><testcase classname="tests.test_calculator" name="test_power" time="0.000"><failure message="assert 5 == 8&#10; +  where 5 = power(2, 3)">def test_power():
+        """Test the power function."""
+&gt;       assert power(2, 3) == 8  # Will fail: returns 5 instead of 8
+E       assert 5 == 8
+E        +  where 5 = power(2, 3)
+
+tests/test_calculator.py:38: AssertionError</failure></testcase></testsuite></testsuites>
