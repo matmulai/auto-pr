@@ -21,7 +21,7 @@ jobs:
           ref: ${{ github.event.workflow_run.head_branch }}
           
       - name: Download workflow artifacts
-        uses: dawidd6/action-download-artifact@v2
+        uses: dawidd6/action-download-artifact@v6
         with:
           workflow: ${{ github.event.workflow_run.workflow_id }}
           run_id: ${{ github.event.workflow_run.id }}
