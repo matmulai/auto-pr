@@ -37,6 +37,7 @@ jobs:
           
       - name: Debug repository structure
         run: |
+          echo "Current working directory: $(pwd)"
           echo "Repository contents:"
           ls -la
           echo "GitHub workspace: $GITHUB_WORKSPACE"
@@ -49,6 +50,10 @@ jobs:
           echo "Tests directory:"
           ls -la tests/ || echo "No tests directory"
           
+      - name: Set script permissions
+        run: |
+          chmod +x .github/scripts/*.py || echo "Failed to set script permissions"
+          
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
@@ -58,13 +63,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install requests openai
+          pip install requests openai pytest pylint
           
       - name: Get test results
         id: get-errors
         run: |
           # Get the test logs from the artifacts or GitHub API
-          python .github/scripts/extract_errors.py
+          python .github/scripts/extract_errors.py || echo "Failed to extract errors but continuing"
           
       - name: Configure Git
         run: |
@@ -77,10 +82,14 @@ jobs:
           git checkout -b $BRANCH_NAME
           echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
           
-      - name: Check fix_code.py
+      - name: Debug OpenAI setup
         run: |
-          echo "Checking fix_code.py content:"
-          cat .github/scripts/fix_code.py || echo "File not found"
+          # Check if API key is set without revealing it
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "WARNING: OPENAI_API_KEY is not set"
+          else
+            echo "OPENAI_API_KEY is set"
+          fi
           
       - name: Fix code with OpenAI
         id: fix-code
@@ -88,9 +97,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          # Create empty directories if they don't exist
+          # Ensure directories exist but don't create files
           mkdir -p calculator tests
-          python .github/scripts/fix_code.py
+          # Run the fix code script
+          python .github/scripts/fix_code.py || echo "Fix attempt had issues but continuing workflow"
           
       - name: Verify fixes
         id: verify
@@ -104,8 +114,18 @@ jobs:
             echo "Tests still failing after attempted fixes."
           fi
           
+      - name: List changes
+        run: |
+          echo "Changes made:"
+          git status
+          git diff
+          
+      - name: Commit changes
+        run: |
+          git add -A
+          git commit -m "fix: Auto-fixed issues using OpenAI" || echo "No changes to commit"
+          
       - name: Create Pull Request
-        if: steps.verify.outputs.fix_successful == 'true'
         uses: peter-evans/create-pull-request@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -116,13 +136,13 @@ jobs:
             
             ## Original Issues:
             ```
-            ${{ steps.get-errors.outputs.error_details }}
+            ${{ steps.get-errors.outputs.error_details || 'No detailed errors available' }}
             ```
             
             ## Changes Made:
-            ${{ steps.fix-code.outputs.changes_summary }}
+            ${{ steps.fix-code.outputs.changes_summary || 'Changes were attempted' }}
             
             ## Verification Results:
-            All tests are now passing!
+            ${{ steps.verify.outputs.fix_successful == 'true' && 'All tests are now passing!' || 'Tests are still failing. This PR shows the attempted fixes.' }}
           branch: ${{ env.BRANCH_NAME }}
           base: ${{ github.event.workflow_run.head_ref }}
