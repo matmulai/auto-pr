@@ -1,0 +1,77 @@
+name: 'Auto-PR AI Code Fixer'
+description: 'Automatically fixes failing tests and lint errors using OpenAI, then creates a pull request'
+author: 'Your Name'
+branding:
+  icon: 'git-pull-request'  
+  color: 'green'
+
+inputs:
+  openai-api-key:
+    description: 'OpenAI API key'
+    required: true
+  test-command:
+    description: 'Command to run tests'
+    required: false
+    default: 'pytest'
+  lint-command:
+    description: 'Command to run linting'
+    required: false
+    default: 'pylint **/*.py --exit-zero'
+  max-attempts:
+    description: 'Maximum fix attempts per file'
+    required: false
+    default: '3'
+  openai-model:
+    description: 'OpenAI model to use'
+    required: false
+    default: 'gpt-3.5-turbo'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests pytest pylint
+      shell: bash
+
+    - name: Extract errors
+      id: get-errors
+      run: python ${{ github.action_path }}/scripts/extract_errors.py
+      env:
+        TEST_COMMAND: ${{ inputs.test-command }}
+        LINT_COMMAND: ${{ inputs.lint-command }}
+      shell: bash
+        
+    - name: Configure Git
+      if: steps.get-errors.outputs.has_errors == 'true'
+      run: |
+        git config --global user.name "GitHub Actions Bot"
+        git config --global user.email "actions@github.com"
+      shell: bash
+        
+    - name: Fix code with OpenAI
+      if: steps.get-errors.outputs.has_errors == 'true'
+      id: fix-code
+      run: python ${{ github.action_path }}/scripts/fix_code.py
+      env:
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        MAX_ATTEMPTS: ${{ inputs.max-attempts }}
+        OPENAI_MODEL: ${{ inputs.openai-model }}
+      shell: bash
+        
+    - name: Create Pull Request
+      if: steps.fix-code.outputs.fixes_applied == 'true'
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ github.token }}
+        commit-message: "fix: Auto-fixed code issues using OpenAI"
+        title: "Auto-fix: Resolved failing tests and lint errors"
+        body: ${{ steps.fix-code.outputs.pr_body }}
+        branch: auto-pr/fixes
+        base: ${{ github.ref_name }}
