@@ -98,11 +98,19 @@ jobs:
           
       - name: Create Pull Request
         run: |
+          # Get the default branch if head_ref is empty
+          BASE_BRANCH="${{ github.event.workflow_run.head_ref }}"
+          if [ -z "$BASE_BRANCH" ]; then
+            BASE_BRANCH=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5)
+            echo "Using default branch: $BASE_BRANCH"
+          fi
+          
+          # Create PR with explicit base
           PR_URL=$(gh pr create \
             --title "Auto-fix: Resolved issues from commit ${{ github.event.workflow_run.head_sha }}" \
             --body "This PR was automatically created by the Auto-PR GitHub Action. Check the changes to see if they resolve the test failures." \
-            --base ${{ github.event.workflow_run.head_ref }} \
-            --head ${{ env.BRANCH_NAME }})
+            --base "$BASE_BRANCH" \
+            --head "${{ env.BRANCH_NAME }}")
           echo "Created PR: $PR_URL"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
