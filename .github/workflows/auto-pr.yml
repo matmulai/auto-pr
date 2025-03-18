@@ -5,11 +5,9 @@ on:
     types:
       - completed
     branches: ["**"]
-
 permissions:
   contents: write    
   pull-requests: write
-
 jobs:
   auto-pr:
     runs-on: ubuntu-latest
@@ -22,6 +20,7 @@ jobs:
         uses: actions/checkout@v3
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0  # Get all files and history
           
       - name: Download workflow artifacts
         uses: dawidd6/action-download-artifact@v6
@@ -35,6 +34,20 @@ jobs:
         run: |
           echo "Downloaded artifacts:"
           ls -la artifacts/ || echo "No artifacts directory found"
+          
+      - name: Debug repository structure
+        run: |
+          echo "Repository contents:"
+          ls -la
+          echo "GitHub workspace: $GITHUB_WORKSPACE"
+          echo ".github directory:"
+          ls -la .github/ || echo "No .github directory"
+          echo ".github/scripts directory:"
+          ls -la .github/scripts/ || echo "No scripts directory"
+          echo "Calculator directory:"
+          ls -la calculator/ || echo "No calculator directory"
+          echo "Tests directory:"
+          ls -la tests/ || echo "No tests directory"
           
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -64,12 +77,19 @@ jobs:
           git checkout -b $BRANCH_NAME
           echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
           
+      - name: Check fix_code.py
+        run: |
+          echo "Checking fix_code.py content:"
+          cat .github/scripts/fix_code.py || echo "File not found"
+          
       - name: Fix code with OpenAI
         id: fix-code
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
+          # Create empty directories if they don't exist
+          mkdir -p calculator tests
           python .github/scripts/fix_code.py
           
       - name: Verify fixes
