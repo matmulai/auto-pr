@@ -1,6 +1,6 @@
 # Auto-PR AI Code Fixer
 
-![GitHub release (latest by date)](https://img.shields.io/github/v/release/yourusername/github-auto-pr-action)
+![GitHub release (latest by date)](https://img.shields.io/github/v/release/matmulai/auto-pr)
 ![GitHub Marketplace](https://img.shields.io/badge/GitHub%20Marketplace-Auto--PR%20AI%20Code%20Fixer-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
